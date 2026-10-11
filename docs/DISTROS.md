@@ -79,12 +79,12 @@ are plain shell over the same tools and were verified on Arch with the same
 sysroot contents. Receipt with the quoted outputs:
 `receipts/2026-10-09-ubuntu-2404.md`.
 
-## NixOS — tested (x86_64)
+## NixOS (x86_64): reported by the flake author, no receipt here
 
 [nix-apple-dev](https://github.com/m9tdev/nix-apple-dev) packages this repository
-as a Nix flake. Verified on 2026-10-11 on NixOS (nixos-unstable): a SwiftUI app
+as a Nix flake. The flake author reports that on 2026-10-11 on NixOS (nixos-unstable) a SwiftUI app
 with an asset catalog and a `#Preview` macro was built, signed with an App Store
-Connect API key, installed and launched on an iPhone 12 mini (iOS 27.0).
+Connect API key, installed and launched on an iPhone 12 mini (iOS 27.0). We did not run it; this repository holds no run record for it.
 
 | Piece | How the flake provides it |
 |---|---|
