@@ -76,6 +76,16 @@ demorects=$(probe_rects simview-demo)
 [ -n "$m3rects" ] && [ -n "$demorects" ] || { echo "FAIL probe printed no rects"; exit 1; }
 log "$m3rects" | sed 's/^/ok   m3app rect /'
 log "$demorects" | sed 's/^/ok   demo rect /'
+# The m3app stack is Text("taps: 0") h=9, 16, Button#1 "tap 0" h=9, 16,
+# Button#2 "never" h=7: total 57, so y0 = (844-57)/2 = 393 and the buttons
+# sit at 393+9+16=418 and 418+9+16=443. A regression that loses the
+# configured spacing between flattened children moves them and fails here.
+if [ "$m3rects" = "$(printf '180 418 29 9\n180 443 29 7')" ]; then
+  log "ok   m3app rects match the documented layout arithmetic"
+else
+  log "FAIL m3app rects do not match the documented layout"
+  fail=1
+fi
 
 echo "== row 0: demo app tap"
 rect_center "$(log "$demorects" | sed -n 1p)"
@@ -273,6 +283,95 @@ if cmp -s "$bh/row8a.cmp" "$bh/row8b.cmp" && cmp -s "$bh/row8a.png" "$bh/row8b.p
   log "ok   identical log bytes and identical PNG bytes"
 else
   log "FAIL row 8: runs differ"; fail=1
+fi
+
+echo "== row 9: nested child state survives the rebuild"
+nestrects=$(probe_rects nestedapp)
+rect_center "$(log "$nestrects" | sed -n 1p)"
+write_tap "$bh/row9.json" "$cx" "$cy" 0
+run "$P/nestedapp" --frames "$b/row9.json" --out "$b/row9.png" >"$bh/row9.log" 2>&1
+rc=$?
+run "$P/nestedapp" --out "$b/row9-before.png" >/dev/null
+if [ $rc -eq 0 ] && grep -q 'state=taps:1,rounds:0' "$bh/row9.log" \
+  && ! python3 "$here/compare.py" "$bh/row9.png" "$bh/row9-before.png" >/dev/null 2>&1; then
+  log "ok   child button state kept its box across the rebuild"
+  log "ok   re-render differs from the no-tap render"
+else
+  log "FAIL row 9"; cat "$bh/row9.log"; fail=1
+fi
+
+echo "== row 10: app state re-renders"
+run "$P/nestedapp" --out "$b/row10-before.png" >/dev/null
+rect_center "$(log "$nestrects" | sed -n 2p)"
+write_tap "$bh/row10.json" "$cx" "$cy" 0
+run "$P/nestedapp" --frames "$b/row10.json" --out "$b/row10.png" >"$bh/row10.log" 2>&1
+rc=$?
+if [ $rc -eq 0 ] && grep -q 'state=taps:0,rounds:1' "$bh/row10.log"; then
+  log "ok   app state survives, action fired"
+else
+  log "FAIL row 10 action"; cat "$bh/row10.log"; fail=1
+fi
+if ! python3 "$here/compare.py" "$bh/row10.png" "$bh/row10-before.png" >/dev/null 2>&1; then
+  log "ok   re-render differs from the no-tap render"
+else
+  log "FAIL row 10: render did not change"; fail=1
+fi
+
+echo "== row 11: topmost button wins under overlap"
+ovrects=$(probe_rects overlapapp)
+rect_center "$(log "$ovrects" | sed -n 1p)"
+write_tap "$bh/row11.json" "$cx" "$cy" 0
+run "$P/overlapapp" --frames "$b/row11.json" --out "$b/row11.png" >"$bh/row11.log" 2>&1
+n2=$(grep -c 'target=Button#2' "$bh/row11.log")
+if [ $? -eq 0 ] && [ "$n2" -eq 2 ] && grep -q 'state=which:2' "$bh/row11.log" \
+  && ! grep -q 'target=Button#1' "$bh/row11.log"; then
+  log "ok   the inner button, drawn last, took the touch"
+else
+  log "FAIL row 11"; cat "$bh/row11.log"; fail=1
+fi
+
+echo "== row 12: second finger down on another button"
+rect_center "$(log "$m3rects" | sed -n 1p)"
+cx1=$cx; cy1=$cy
+rect_center "$(log "$m3rects" | sed -n 2p)"
+cat > "$bh/row12.json" <<EOF
+[
+  {"t_ms": 0,   "fingers": [{"finger": 0, "phase": "began", "x": $cx1, "y": $cy1}]},
+  {"t_ms": 40,  "fingers": [{"finger": 0, "phase": "stationary", "x": $cx1, "y": $cy1},
+                            {"finger": 1, "phase": "began", "x": $cx, "y": $cy}]},
+  {"t_ms": 80,  "fingers": [{"finger": 0, "phase": "ended", "x": $cx1, "y": $cy1},
+                            {"finger": 1, "phase": "stationary", "x": $cx, "y": $cy}]},
+  {"t_ms": 120, "fingers": [{"finger": 1, "phase": "ended", "x": $cx, "y": $cy}]}
+]
+EOF
+run "$P/m3app" --frames "$b/row12.json" --out "$b/row12.png" >"$bh/row12.log" 2>&1
+n1=$(grep -c 'target=Button#1' "$bh/row12.log")
+z=$(grep -c 'state=count:0' "$bh/row12.log")
+if [ $? -eq 0 ] && [ "$n1" -eq 6 ] && [ "$z" -eq 6 ]; then
+  log "ok   one shared target, no action on either button"
+else
+  log "FAIL row 12"; cat "$bh/row12.log"; fail=1
+fi
+
+echo "== row 13: stationary finger keeps the gesture open"
+rect_center "$(log "$m3rects" | sed -n 1p)"
+cat > "$bh/row13.json" <<EOF
+[
+  {"t_ms": 0,   "fingers": [{"finger": 0, "phase": "began", "x": $cx, "y": $cy}]},
+  {"t_ms": 60,  "fingers": [{"finger": 0, "phase": "stationary", "x": $cx, "y": $cy},
+                            {"finger": 1, "phase": "began", "x": $cx, "y": $cy}]},
+  {"t_ms": 120, "fingers": [{"finger": 0, "phase": "stationary", "x": $cx, "y": $cy},
+                            {"finger": 1, "phase": "ended", "x": $cx, "y": $cy}]},
+  {"t_ms": 180, "fingers": [{"finger": 0, "phase": "ended", "x": $cx, "y": $cy}]}
+]
+EOF
+run "$P/m3app" --frames "$b/row13.json" --out "$b/row13.png" >"$bh/row13.log" 2>&1
+if [ $? -eq 0 ] && grep -q 'finger=0 stationary' "$bh/row13.log" \
+  && [ "$(grep -c 'state=count:0' "$bh/row13.log")" -eq 5 ] \
+  && check_one_action "$bh/row13.log"; then
+  log "ok   no early fire, one action on the last lift"
+else
+  log "FAIL row 13"; cat "$bh/row13.log"; fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
