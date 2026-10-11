@@ -108,6 +108,11 @@ left with a suspended app.
 - iOS 27 only. The pairing record and the open RemotePairing port are the iOS 27 flow.
 - The phone needs a Wi-Fi connection and the Tailscale VPN running.
 - The host key file is a credential. Anyone with it and a route to the phone can drive it.
+- A screenshot shows whatever is on the screen. If you use the phone while a test runs, the picture can show private
+  messages or other apps. Test while nobody uses the phone and the lock screen is showing. The table above shows that a
+  phone with its screen off for hours refuses launches, so wake it to the lock screen first. Treat each screenshot as
+  private and delete it after you read it. We found this when two test screenshots showed a chat and the app library
+  instead of our app.
 
 ## Plan B: a laptop you charge the phone from
 
