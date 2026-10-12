@@ -38,13 +38,23 @@
 #       work on iOS 26 (per-host tunnel gating, FINDINGS.md 17).
 #       PKG must be signed with a real certificate: xtool's free-provisioning
 #       signing only happens inside `xtool dev run`.
+#       --console [SECONDS] (default 20; --console=SECONDS also works) watches the app's own
+#       output: after the install it launches the app with `developer dvt launch <bundle id>
+#       --stream`, prints stdout and stderr for SECONDS, then reports
+#       `running after N s: yes/no` (developer dvt proclist) and
+#       `fatal text seen: yes/no` (the stream holds an `uncaught exception` or
+#       `Terminating app` line), then stops the app (developer dvt pkill).
+#       Exit code: 0 when the launch started, non-zero when it did not. A
+#       fatal line in the stream is a report about the app, not an error of
+#       this script. Ctrl-C during the stream stops the app and exits 130.
 #
 #   ./device-run.sh --over-tailnet HOST PKG   install+launch over Tailscale with no cable and
 #       no Mac, iOS 27: HOST is the phone's tailnet address (100.x). One-time setup over USB:
 #       `tools/tailnet-tunnel.py pair`. tailnet-tunnel.py opens the RemotePairing tunnel (the
 #       phone advertises it on port 49152 and accepts it from any routed address; lockdownd
 #       does not, and mDNS does not cross the tailnet). Needs sudo for the TUN device and a
-#       signed PKG. How-to, limits and receipts: docs/OVER-TAILNET.md.
+#       signed PKG. --console [SECONDS] works here too; see --rsd. How-to, limits and
+#       receipts: docs/OVER-TAILNET.md.
 #
 # Without a tailnet pairing record, a phone reachable only via Tailscale can still be reached
 # through pymobiledevice3's tunneld WebSocket bridge on a machine that sees the phone (USB or
@@ -70,12 +80,18 @@ IPSW="$HOME/.local/bin/ipsw"
 [ -x "$IPSW" ] || IPSW=$(command -v ipsw || echo "$IPSW")
 
 MODE=usb; UDID=; RSD_HOST=; RSD_PORT=; PKG=; LLDB=0; SUDO=0; ATTACH=0; TAILNET_HOST=
+CONSOLE=0; CONSOLE_SECS=20
 while [ $# -gt 0 ]; do
   case "$1" in
     --network) MODE=network ;;
     --lldb) LLDB=1 ;;
     --sudo) SUDO=1 ;;
     --attach) LLDB=1; ATTACH=1 ;;
+    --console)
+      CONSOLE=1
+      # An all-digit value is the seconds; anything else is the next flag.
+      case "${2:-}" in ''|*[!0-9]*) ;; *) CONSOLE_SECS=$2; shift ;; esac ;;
+    --console=*) CONSOLE=1; CONSOLE_SECS="${1#--console=}" ;;
     -u|--udid) UDID="${2:?--udid needs a value}"; shift ;;
     --rsd) MODE=rsd
       RSD_HOST="${2:?usage: --rsd HOST PORT PACKAGE}"
@@ -86,10 +102,19 @@ while [ $# -gt 0 ]; do
       TAILNET_HOST="${2:?usage: --over-tailnet PHONE_TAILNET_IP PACKAGE}"
       PKG="${3:?usage: --over-tailnet PHONE_TAILNET_IP PACKAGE}"
       shift 2 ;;
-    *) echo "Unknown argument: $1 (modes: [--lldb|--attach [--sudo]] [--network] [--rsd HOST PORT PKG] [--over-tailnet HOST PKG])" >&2; exit 2 ;;
+    *) echo "Unknown argument: $1 (modes: [--lldb|--attach [--sudo]] [--network] [--rsd HOST PORT PKG] [--over-tailnet HOST PKG], console: [--console [SECONDS]] or --console=SECONDS)" >&2; exit 2 ;;
   esac
   shift
 done
+
+if [ "$CONSOLE" = 1 ]; then
+  case "$CONSOLE_SECS" in ''|*[!0-9]*|0)
+    echo "--console needs a number of seconds of 1 or more" >&2; exit 2 ;;
+  esac
+  if [ "$MODE" != rsd ] && [ "$MODE" != tailnet ]; then
+    echo "--console works with --rsd or --over-tailnet; they hold the RSD address" >&2; exit 2
+  fi
+fi
 
 if [ "$SUDO" = 1 ] && [ "$LLDB" = 0 ]; then
   echo "--sudo only applies to --lldb" >&2; exit 2
@@ -132,11 +157,17 @@ stop_forwarder() {
 }
 
 # xtool may prefix the bundle id (XTL-<team>.<id>); print the installed one, or nothing.
+# Extra arguments are the connection: --rsd HOST PORT for rsd and tailnet mode.
 installed_bid() {
-  "$PMD3" apps list "${UDID_ARGS[@]}" 2>/dev/null | python3 -c '
+  local b=$1; shift
+  "$PMD3" apps list "${UDID_ARGS[@]}" "$@" 2>/dev/null | python3 -c '
 import json, sys
 b = sys.argv[1]
-print(next((k for k in json.load(sys.stdin) if k == b or k.endswith("." + b)), ""))' "$1"
+try:
+    apps = json.load(sys.stdin)
+except ValueError:
+    sys.exit("apps list did not return JSON; check the --rsd or --udid arguments")
+print(next((k for k in apps if k == b or k.endswith("." + b)), ""))' "$b"
 }
 
 # Mount the DDI, open an RSD tunnel, give LLDB the phone's Swift runtime on disk, stop the app,
@@ -306,11 +337,74 @@ print(json.load(sys.stdin)[sys.argv[1]]["Path"])' "$bid")
   return "$rc"
 }
 
+# --console: stream the app's own output after the install, then report and stop it. A fatal
+# line in the stream is a report about the app, not an error of this script; a launch that
+# never started is (exit non-zero).
+console_run() {
+  local bid=$1 ibid stream lrc rc pid run fatal
+  # Our own app only: stream the app this run installed, not a same-named app already there.
+  ibid=$(installed_bid "$bid" --rsd "$RSD_HOST" "$RSD_PORT")
+  if [ -z "$ibid" ]; then
+    echo "Refusing to stream: $bid is not the bundle id this run installed." >&2
+    return 1
+  fi
+  stream=$(mktemp)
+  echo "== Console stream of $ibid for ${CONSOLE_SECS} s =="
+  # PYTHONUNBUFFERED: the pid line is a plain print() into the pipe; buffered, timeout's
+  # SIGTERM ends the tool with no flush and the line never reaches the stream file.
+  lrc=0
+  # timeout cuts the stream at CONSOLE_SECS (status 124): the app streamed the whole window.
+  PYTHONUNBUFFERED=1 timeout "$CONSOLE_SECS" "$PMD3" developer dvt launch "$ibid" --stream --rsd "$RSD_HOST" "$RSD_PORT" 2>&1 |
+    tee "$stream" || lrc=$?
+  rc=$lrc
+  if [ "$rc" = 130 ]; then
+    # Ctrl-C during the stream: stop the app, say so, pass the status through.
+    timeout 30 "$PMD3" developer dvt pkill --bundle "$ibid" --rsd "$RSD_HOST" "$RSD_PORT" >/dev/null 2>&1 || true
+    rm -f "$stream"
+    echo "interrupted" >&2
+    return 130
+  fi
+  if [ "$rc" = 124 ]; then rc=0; fi
+  pid=$(sed -n 's/^Process launched with pid \([0-9][0-9]*\)$/\1/p' "$stream" | head -n1)
+  if [ -z "$pid" ]; then
+    # No pid line means the launch never started: a locked phone refuses launches, an
+    # install-address mismatch refuses silently. Report it as a failed launch, not as
+    # an app that ran and died.
+    echo "launch did not start: no 'Process launched with pid' line within ${CONSOLE_SECS} s (phone locked or app refused?)" >&2
+    echo "running after ${CONSOLE_SECS} s: unknown"
+    echo "fatal text seen: unknown"
+    if [ "$rc" = 0 ]; then rc=1; fi
+  else
+    run=no
+    if timeout 30 "$PMD3" developer dvt proclist --rsd "$RSD_HOST" "$RSD_PORT" 2>/dev/null |
+        python3 -c '
+import json, sys
+ps = json.load(sys.stdin)
+print("yes" if int(sys.argv[1]) in [p.get("pid", 0) for p in ps] else "no")' "$pid" | grep -q yes; then
+      run=yes
+    fi
+    if grep -Eq 'uncaught exception|Terminating app' "$stream"; then fatal=yes; else fatal=no; fi
+    echo "running after ${CONSOLE_SECS} s: $run"
+    echo "fatal text seen: $fatal"
+  fi
+  timeout 30 "$PMD3" developer dvt pkill --bundle "$ibid" --rsd "$RSD_HOST" "$RSD_PORT" >/dev/null 2>&1 || true
+  rm -f "$stream"
+  if [ "$lrc" != 0 ] && [ "$lrc" != 124 ]; then
+    echo "launch failed: developer dvt launch exited with $lrc" >&2
+  fi
+  return "$rc"
+}
+
 rsd_run() {
   echo "== Install/launch via RSD $RSD_HOST:$RSD_PORT =="
   $PMD3 apps install "$PKG" --rsd "$RSD_HOST" "$RSD_PORT"
   BID=$(grep -E '^bundleID:' xtool.yml | awk '{print $2}')
-  if [ -z "$BID" ]; then echo "No bundle_id in xtool.yml; launch it by hand:"; else
+  if [ -z "$BID" ]; then
+    echo "No bundle_id in xtool.yml; launch it by hand:"
+    if [ "$CONSOLE" = 1 ]; then echo "--console needs a bundle_id in xtool.yml" >&2; return 1; fi
+  elif [ "$CONSOLE" = 1 ]; then
+    console_run "$BID"
+  else
     $PMD3 developer core-device launch-application "$BID" "" --rsd "$RSD_HOST" "$RSD_PORT"
   fi
 }
