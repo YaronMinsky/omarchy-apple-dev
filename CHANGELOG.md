@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### React Native probe
+
+- The abort listed under v0.2.0 happens with the first ipa's JS bundle (built from an older `App.tsx`) and not with a rebuild from the current `App.tsx`. The mechanism is not proven. The rebuild stayed running for 25 seconds in 5 of 5 phone launches. Nobody checked the screen. See `receipts/2026-10-12-rnprobe-stale-bundle.md`.
+
 ## v0.2.0
 
 ### Build routes
