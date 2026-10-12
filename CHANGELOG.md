@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Crash symbolication
+
+- `tools/ips-symbolicate.py` reads a pulled `.ips` crash report on Linux. It matches local Mach-O files by `LC_UUID` and resolves stripped frames from the symbol table. It prints the exception, the termination reason, and the backtraces of the faulting thread and the last exception. See `docs/CRASH-SYMBOLICATION.md` and `receipts/2026-10-12-ips-symbolicate.md`.
+
 ## v0.3.0
 
 ### Simulation research and simview
