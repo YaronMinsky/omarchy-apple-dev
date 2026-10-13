@@ -11,6 +11,13 @@
 
 - FINDINGS.md gains an entry on linking a Rust static library into an xtool app. The archive holds C members that duplicate symbols in `libclang_rt.ios.a`, and `ld64.lld` rejects the duplicates. The entry gives an `llvm-ar` and `llvm-nm` filter that deletes a member only when every symbol it defines is also defined in `libclang_rt.ios.a`. Reported by a user, not reproduced here. The filter was checked on scratch archives only.
 
+### Venv repair
+
+- `install-toolchain.sh` creates the pymobiledevice3 venv from the resolved interpreter path, not from a
+  `latest` symlink, and both step 4 and `--repair` rebuild the venv when its packages no longer import. The
+  rebuild removes only the venv directory after a path guard. Covered by stub tests in
+  `tests/install-venv/run.sh`; see `receipts/2026-10-13-venv-resolve.md`.
+
 ### Device console
 
 - `device-run.sh --rsd` and `--over-tailnet` take `--console [SECONDS]`. After the install it streams the
