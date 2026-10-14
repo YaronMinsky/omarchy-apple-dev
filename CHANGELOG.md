@@ -16,6 +16,13 @@
 
 - `tools/xcstrings_symbols.py` escapes Swift keywords with backticks, so a key such as `CONTINUE` gives a symbol that compiles. Keys that differ only in case or punctuation get no symbol, and the tool prints one warning per name. The strings stay in the compiled table. Covered by `tests/test_xcstrings_symbols.py`.
 
+### simview M6: keys and text field focus
+
+- The simview frame file gains `key` records (a USB keyboard usage number, page 7) and `text` records (one
+  character), and the module gains `TextField` with focus, a caret, and optional `onSubmit`. A completed tap focuses
+  a field, a tap elsewhere blurs, and keys with no focus are dropped with a warning line. `simview/test-m6.sh` runs
+  eleven rows and six mutation checks; see `simview/TESTS-M6.md` and `receipts/2026-10-14-simview-m6.md`.
+
 ### Xcode version from a .xip
 
 - `install-toolchain.sh` reads `Xcode.app/Contents/version.plist` from the `.xip` stream with
